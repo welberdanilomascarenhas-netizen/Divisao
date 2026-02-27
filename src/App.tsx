@@ -2,14 +2,15 @@ import { useState, useEffect, useMemo, FormEvent } from 'react';
 import { collection, addDoc, onSnapshot, query, orderBy, Timestamp, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import type { Transaction } from './types';
-import { Pencil, Save, X, Trash2, RotateCcw } from 'lucide-react';
+import { Pencil, Save, X, Trash2, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
 
 export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [amount, setAmount] = useState('');
   const [observation, setObservation] = useState('');
   const [loading, setLoading] = useState(true);
-  const [isSplit, setIsSplit] = useState(true);
+  const [splitType, setSplitType] = useState<Transaction['splitType']>('equal');
+  const [person1Split, setPerson1Split] = useState('50');
 
   const [person1Name, setPerson1Name] = useState('Pessoa 1');
   const [person2Name, setPerson2Name] = useState('Pessoa 2');
@@ -18,6 +19,8 @@ export default function App() {
   const [isEditingNames, setIsEditingNames] = useState(false);
   const [tempPerson1Name, setTempPerson1Name] = useState('');
   const [tempPerson2Name, setTempPerson2Name] = useState('');
+
+  const [isNameSectionCollapsed, setIsNameSectionCollapsed] = useState(true);
 
   const [editingTxId, setEditingTxId] = useState<string | null>(null);
   const [tempEditAmount, setTempEditAmount] = useState('');
@@ -53,7 +56,8 @@ export default function App() {
           observation: data.observation,
           timestamp: data.timestamp.toDate(),
           deleted: data.deleted || false,
-          isSplit: data.isSplit === undefined ? true : data.isSplit,
+          splitType: data.splitType || 'equal',
+          person1Split: data.person1Split,
         });
       });
       setTransactions(transactionsData);
@@ -66,12 +70,25 @@ export default function App() {
   const balance = useMemo(() => {
     return transactions
       .filter(tx => !tx.deleted)
-      .reduce((acc, transaction) => {
-        const value = transaction.isSplit ? transaction.amount / 2 : transaction.amount;
-        if (transaction.paidBy === person1Name) {
-          return acc + value;
+      .reduce((acc, tx) => {
+        let person1Contribution = 0;
+        switch (tx.splitType) {
+          case 'equal':
+            person1Contribution = tx.amount / 2;
+            break;
+          case 'full':
+            person1Contribution = tx.paidBy === person1Name ? tx.amount : 0;
+            break;
+          case 'percentage':
+            person1Contribution = tx.amount * ((tx.person1Split || 50) / 100);
+            break;
+        }
+        const person2Contribution = tx.amount - person1Contribution;
+
+        if (tx.paidBy === person1Name) {
+          return acc + person2Contribution;
         } else {
-          return acc - value;
+          return acc - person1Contribution;
         }
       }, 0);
   }, [transactions, person1Name]);
@@ -84,6 +101,12 @@ export default function App() {
       return;
     }
 
+    const person1SplitNumber = parseFloat(person1Split);
+    if (splitType === 'percentage' && (isNaN(person1SplitNumber) || person1SplitNumber < 0 || person1SplitNumber > 100)) {
+        alert('Por favor, insira uma porcentagem válida (0-100).');
+        return;
+    }
+
     try {
       await addDoc(collection(db, 'transactions'), {
         amount: amountNumber,
@@ -91,10 +114,13 @@ export default function App() {
         observation,
         timestamp: Timestamp.now(),
         deleted: false,
-        isSplit,
+        splitType,
+        ...(splitType === 'percentage' && { person1Split: person1SplitNumber }),
       });
       setAmount('');
       setObservation('');
+      setSplitType('equal');
+      setPerson1Split('50');
     } catch (error) {
       console.error('Erro ao adicionar transação: ', error);
       alert('Falha ao adicionar transação.');
@@ -183,45 +209,69 @@ export default function App() {
     return 'Tudo certo!';
   };
 
+  const getSplitTypeLabel = (tx: Transaction) => {
+    switch (tx.splitType) {
+      case 'full':
+        return 'Inteiro';
+      case 'percentage':
+        const p2Split = 100 - (tx.person1Split || 0);
+        return `Porcentagem (${tx.person1Split}/${p2Split})`;
+      case 'equal':
+      default:
+        return 'Dividido';
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto p-4 sm:p-6 lg:p-8 font-sans">
       <header className="text-center mb-8">
-        <h1 className="text-4xl font-bold tracking-tight text-slate-800">Controle de Contas</h1>
+        <h1 className="text-4xl font-bold tracking-tight text-slate-800">Racha Contas</h1>
         <p className="text-slate-500 mt-2">Acompanhe despesas compartilhadas entre duas pessoas.</p>
       </header>
 
       <div className="bg-white p-6 rounded-2xl shadow-md mb-8">
-        <div className="flex justify-between items-center mb-4">
+        <div 
+          className="flex justify-between items-center cursor-pointer" 
+          onClick={() => setIsNameSectionCollapsed(!isNameSectionCollapsed)}
+        >
           <h2 className="text-lg font-semibold text-slate-700">Nomes</h2>
-          {!isEditingNames && (
-            <button onClick={() => setIsEditingNames(true)} className="text-slate-500 hover:text-indigo-600">
-              <Pencil size={18} />
-            </button>
-          )}
+          <button className="text-slate-500 hover:text-indigo-600">
+            {isNameSectionCollapsed ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
+          </button>
         </div>
-        {isEditingNames ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <input
-              type="text"
-              value={tempPerson1Name}
-              onChange={(e) => setTempPerson1Name(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-            />
-            <input
-              type="text"
-              value={tempPerson2Name}
-              onChange={(e) => setTempPerson2Name(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-            />
-            <div className="col-span-1 sm:col-span-2 flex justify-end gap-2 mt-2">
-              <button onClick={handleSaveNames} className="p-2 text-slate-500 hover:text-green-600"><Save size={20} /></button>
-              <button onClick={handleCancelEditNames} className="p-2 text-slate-500 hover:text-red-600"><X size={20} /></button>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <p className="font-medium text-slate-800 truncate">{person1Name}</p>
-            <p className="font-medium text-slate-800 truncate">{person2Name}</p>
+
+        {!isNameSectionCollapsed && (
+          <div className="mt-4">
+            {isEditingNames ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <input
+                  type="text"
+                  value={tempPerson1Name}
+                  onChange={(e) => setTempPerson1Name(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+                <input
+                  type="text"
+                  value={tempPerson2Name}
+                  onChange={(e) => setTempPerson2Name(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+                <div className="col-span-1 sm:col-span-2 flex justify-end gap-2 mt-2">
+                  <button onClick={handleSaveNames} className="p-2 text-slate-500 hover:text-green-600"><Save size={20} /></button>
+                  <button onClick={handleCancelEditNames} className="p-2 text-slate-500 hover:text-red-600"><X size={20} /></button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex justify-between items-center">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-grow">
+                      <p className="font-medium text-slate-800 truncate">{person1Name}</p>
+                      <p className="font-medium text-slate-800 truncate">{person2Name}</p>
+                  </div>
+                  <button onClick={() => setIsEditingNames(true)} className="text-slate-500 hover:text-indigo-600 ml-4 flex-shrink-0">
+                    <Pencil size={18} />
+                  </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -257,12 +307,31 @@ export default function App() {
           </div>
         </div>
         <div className="mb-4">
-            <label className="block text-sm font-medium text-slate-600 mb-1">Tipo de Lançamento</label>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setIsSplit(true)} className={`w-full py-2 rounded-md text-sm font-semibold transition-colors ${isSplit ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>Dividir Valor</button>
-              <button type="button" onClick={() => setIsSplit(false)} className={`w-full py-2 rounded-md text-sm font-semibold transition-colors ${!isSplit ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>Valor Inteiro</button>
+            <label className="block text-sm font-medium text-slate-600 mb-1">Tipo de Divisão</label>
+            <div className="grid grid-cols-3 gap-2">
+              <button type="button" onClick={() => setSplitType('equal')} className={`py-2 rounded-md text-sm font-semibold transition-colors ${splitType === 'equal' ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>Igual</button>
+              <button type="button" onClick={() => setSplitType('full')} className={`py-2 rounded-md text-sm font-semibold transition-colors ${splitType === 'full' ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>Inteiro</button>
+              <button type="button" onClick={() => setSplitType('percentage')} className={`py-2 rounded-md text-sm font-semibold transition-colors ${splitType === 'percentage' ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>Porcentagem</button>
             </div>
         </div>
+        {splitType === 'percentage' && (
+            <div className="mb-4 grid grid-cols-2 gap-4 items-center">
+                <div>
+                    <label htmlFor="person1Split" className="block text-sm font-medium text-slate-600 mb-1">% {person1Name}</label>
+                    <input
+                        id="person1Split"
+                        type="number"
+                        value={person1Split}
+                        onChange={(e) => setPerson1Split(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-600 mb-1">% {person2Name}</label>
+                    <p className="w-full px-3 py-2 border border-slate-200 rounded-md bg-slate-50">{100 - parseFloat(person1Split || '0')}</p>
+                </div>
+            </div>
+        )}
         <div className="mb-4">
           <label htmlFor="observation" className="block text-sm font-medium text-slate-600 mb-1">Observação (Opcional)</label>
           <input
@@ -306,7 +375,7 @@ export default function App() {
                   <div className={`${tx.deleted ? 'line-through text-slate-400' : ''}`}>
                     <p className={`font-semibold ${tx.deleted ? '' : 'text-slate-800'}`}>
                       {tx.paidBy} pagou R${tx.amount.toFixed(2).replace('.', ',')}
-                      <span className="text-xs font-normal text-slate-400 ml-2">({tx.isSplit ? 'Dividido' : 'Inteiro'})</span>
+                      <span className="text-xs font-normal text-slate-400 ml-2">({getSplitTypeLabel(tx)})</span>
                     </p>
                     {tx.observation && <p className={`text-sm ${tx.deleted ? '' : 'text-slate-500'}`}>{tx.observation}</p>}
                   </div>
