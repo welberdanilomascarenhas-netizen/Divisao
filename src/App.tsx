@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, FormEvent } from 'react';
 import { collection, addDoc, onSnapshot, query, orderBy, Timestamp, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import type { Transaction } from './types';
-import { Pencil, Save, X, Trash2 } from 'lucide-react';
+import { Pencil, Save, X, Trash2, RotateCcw } from 'lucide-react';
 
 export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -18,6 +18,10 @@ export default function App() {
   const [isEditingNames, setIsEditingNames] = useState(false);
   const [tempPerson1Name, setTempPerson1Name] = useState('');
   const [tempPerson2Name, setTempPerson2Name] = useState('');
+
+  const [editingTxId, setEditingTxId] = useState<string | null>(null);
+  const [tempEditAmount, setTempEditAmount] = useState('');
+  const [tempEditObservation, setTempEditObservation] = useState('');
 
   useEffect(() => {
     const namesDocRef = doc(db, 'config', 'names');
@@ -109,6 +113,16 @@ export default function App() {
     }
   };
 
+  const handleRestoreTransaction = async (id: string) => {
+    const transactionDoc = doc(db, 'transactions', id);
+    try {
+      await updateDoc(transactionDoc, { deleted: false });
+    } catch (error) {
+      console.error('Erro ao restaurar transação: ', error);
+      alert('Falha ao restaurar transação.');
+    }
+  };
+
   const handleSaveNames = async () => {
     const namesDocRef = doc(db, 'config', 'names');
     try {
@@ -124,6 +138,38 @@ export default function App() {
     setTempPerson1Name(person1Name);
     setTempPerson2Name(person2Name);
     setIsEditingNames(false);
+  };
+
+  const handleStartEdit = (tx: Transaction) => {
+    setEditingTxId(tx.id);
+    setTempEditAmount(String(tx.amount).replace('.', ','));
+    setTempEditObservation(tx.observation);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingTxId(null);
+  };
+
+  const handleUpdateTransaction = async () => {
+    if (!editingTxId) return;
+
+    const amountNumber = parseFloat(tempEditAmount.replace(',', '.'));
+    if (isNaN(amountNumber) || amountNumber <= 0) {
+      alert('Por favor, insira um valor válido para a edição.');
+      return;
+    }
+
+    const transactionDoc = doc(db, 'transactions', editingTxId);
+    try {
+      await updateDoc(transactionDoc, {
+        amount: amountNumber,
+        observation: tempEditObservation,
+      });
+      setEditingTxId(null);
+    } catch (error) {
+      console.error('Erro ao atualizar transação: ', error);
+      alert('Falha ao atualizar transação.');
+    }
   };
 
   const getBalanceMessage = () => {
@@ -240,20 +286,51 @@ export default function App() {
         ) : (
           <ul className="space-y-3">
             {transactions.map((tx) => (
-              <li key={tx.id} className={`bg-white p-4 rounded-lg shadow-sm flex justify-between items-center transition-opacity ${tx.deleted ? 'opacity-50' : ''}`}>
-                <div className={`${tx.deleted ? 'line-through text-slate-400' : ''}`}>
-                  <p className={`font-semibold ${tx.deleted ? '' : 'text-slate-800'}`}>
-                    {tx.paidBy} pagou R${tx.amount.toFixed(2).replace('.', ',')}
-                    <span className="text-xs font-normal text-slate-400 ml-2">({tx.isSplit ? 'Dividido' : 'Inteiro'})</span>
-                  </p>
-                  {tx.observation && <p className={`text-sm ${tx.deleted ? '' : 'text-slate-500'}`}>{tx.observation}</p>}
-                </div>
-                <div className="flex items-center gap-2">
-                   <p className={`text-xs ${tx.deleted ? 'text-slate-400' : 'text-slate-400'}`}>{tx.timestamp.toLocaleDateString()} {tx.timestamp.toLocaleTimeString()}</p>
-                  {!tx.deleted && (
-                    <button onClick={() => handleDeleteTransaction(tx.id)} className="text-slate-400 hover:text-red-600">
-                      <Trash2 size={16} />
-                    </button>
+              <li key={tx.id} className={`bg-white p-4 rounded-lg shadow-sm flex justify-between items-start transition-opacity ${tx.deleted ? 'opacity-50' : ''}`}>
+                {editingTxId === tx.id ? (
+                  <div className="flex-grow">
+                    <input 
+                      type="text" 
+                      value={tempEditAmount} 
+                      onChange={(e) => setTempEditAmount(e.target.value)}
+                      className="w-full px-2 py-1 mb-2 border border-slate-300 rounded-md shadow-sm"
+                    />
+                    <input 
+                      type="text" 
+                      value={tempEditObservation} 
+                      onChange={(e) => setTempEditObservation(e.target.value)}
+                      className="w-full px-2 py-1 border border-slate-300 rounded-md shadow-sm"
+                    />
+                  </div>
+                ) : (
+                  <div className={`${tx.deleted ? 'line-through text-slate-400' : ''}`}>
+                    <p className={`font-semibold ${tx.deleted ? '' : 'text-slate-800'}`}>
+                      {tx.paidBy} pagou R${tx.amount.toFixed(2).replace('.', ',')}
+                      <span className="text-xs font-normal text-slate-400 ml-2">({tx.isSplit ? 'Dividido' : 'Inteiro'})</span>
+                    </p>
+                    {tx.observation && <p className={`text-sm ${tx.deleted ? '' : 'text-slate-500'}`}>{tx.observation}</p>}
+                  </div>
+                )}
+                <div className="flex items-center gap-2 pl-4 flex-shrink-0">
+                  {editingTxId === tx.id ? (
+                    <>
+                      <button onClick={handleUpdateTransaction} className="text-slate-400 hover:text-green-600"><Save size={16} /></button>
+                      <button onClick={handleCancelEdit} className="text-slate-400 hover:text-red-600"><X size={16} /></button>
+                    </>
+                  ) : (
+                    <>
+                      <p className={`text-xs ${tx.deleted ? 'text-slate-400' : 'text-slate-400'}`}>{tx.timestamp.toLocaleDateString()} {tx.timestamp.toLocaleTimeString()}</p>
+                      <button onClick={() => handleStartEdit(tx)} className="text-slate-400 hover:text-indigo-600" title="Editar"><Pencil size={16} /></button>
+                      {tx.deleted ? (
+                        <button onClick={() => handleRestoreTransaction(tx.id)} className="text-slate-400 hover:text-green-600" title="Restaurar">
+                          <RotateCcw size={16} />
+                        </button>
+                      ) : (
+                        <button onClick={() => handleDeleteTransaction(tx.id)} className="text-slate-400 hover:text-red-600" title="Excluir">
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </li>
